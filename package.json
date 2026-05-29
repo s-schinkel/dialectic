@@ -13,6 +13,9 @@
     "@anthropic-ai/sdk": "^0.40.0",
     "dotenv": "^16.4.5"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT",
   "private": true
 }

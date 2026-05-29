@@ -12,14 +12,33 @@ terminal as it arrives:
 Each stage feeds the next, so the synthesis is reasoned *through* the critique
 rather than around it.
 
+## Requirements
+
+- **Node.js 18 or newer** (the app uses ES modules and the global `fetch` the
+  Anthropic SDK depends on).
+- **An Anthropic API key** — create one at
+  <https://console.anthropic.com/settings/keys>.
+
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env   # then edit .env and add your Anthropic API key
+cp .env.example .env   # then edit .env and paste your Anthropic API key
 ```
 
-The key is read from `ANTHROPIC_API_KEY` (loaded from `.env`).
+The key is read from `ANTHROPIC_API_KEY`, loaded from `.env` (which is
+git-ignored — your real key never gets committed).
+
+### Optional: install as a `dialectic` command
+
+`index.js` is an executable with a `bin` entry, so you can run it by name:
+
+```bash
+npm link                          # symlinks `dialectic` onto your PATH
+dialectic "Is nuclear power worth the risk?"
+```
+
+(Use `npm unlink -g dialectic` to remove it later.)
 
 ## Usage
 
@@ -74,7 +93,12 @@ The model is a single constant (`MODEL`) at the top of `index.js`. It defaults t
 `claude-sonnet-4-6`. (The original spec named `claude-sonnet-4-20250514`, which is
 deprecated and retires 2026-06-15 — `claude-sonnet-4-6` is its drop-in replacement.)
 
-## Note
+## Notes
 
-This is a personal tool — a thinking aid, not a polished product for public
-release. No tests, no packaging, no support guarantees.
+- Each question makes **three Anthropic API calls** (one per stage), so a run
+  costs a small amount of tokens and takes a few seconds per stage.
+- If `ANTHROPIC_API_KEY` is missing, the app exits with a clear message pointing
+  you back to `.env`.
+
+This is a personal project — a thinking aid, shared as-is. No tests, no support
+guarantees.
