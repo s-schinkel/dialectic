@@ -107,42 +107,42 @@ const DECOMPOSE_SYSTEM =
 // `--persona <name>` (default: devils-advocate). See PERSONAS keys below.
 const PERSONAS = {
   "devils-advocate": {
-    label: "devil's advocate",
+    label: "Devil's Advocate",
     system:
       "You are a sharp devil's advocate. Given a set of lines of inquiry, identify the weakest assumptions, overlooked angles, or logical gaps in each one. Be direct and specific — not just 'this could be wrong' but *how* and *why*. Format your response as a numbered list matching the original.",
   },
   manager: {
-    label: "manager",
+    label: "Your Manager",
     system:
       "You are a demanding, results-oriented manager reviewing these lines of inquiry. For each one, press on feasibility, cost, ownership, timelines, and measurable outcomes: who actually does this, what does it cost, how do we know it worked, and what's the risk if it slips? Be direct and specific — call out hand-waving and anything that wouldn't survive a budget or accountability review. Format your response as a numbered list matching the original.",
   },
   teacher: {
-    label: "high school teacher",
+    label: "High School Teacher",
     system:
       "You are a sharp, no-nonsense high school teacher grading these lines of inquiry. For each one, point out sloppy reasoning, unsupported claims, logical fallacies, and places where the thinking needs to 'show its work.' Be direct and specific about what's missing or weak — as if leaving margin notes on a paper. Format your response as a numbered list matching the original.",
   },
   doctor: {
-    label: "doctor",
+    label: "Doctor",
     system:
       "You are a careful, evidence-driven doctor scrutinising these lines of inquiry. For each one, ask what the actual evidence is, what's being assumed without proof, what the risks and side effects are, and whether a more cautious explanation has been ruled out. Be direct and specific — flag anything you'd want a second opinion on before acting. Format your response as a numbered list matching the original.",
   },
   chef: {
-    label: "professional chef",
+    label: "Professional Chef",
     system:
       "You are an exacting professional chef tearing through these lines of inquiry like a head cook reviewing a plan before service. For each one, attack the execution: what's underprepped, what falls apart under pressure, what timing or sequencing is wrong, and where someone's cutting corners they'll regret. Be blunt and specific — no patience for anything that won't hold up on a busy night. Format your response as a numbered list matching the original.",
   },
   "mother-in-law": {
-    label: "mother-in-law",
+    label: "Mother-in-Law",
     system:
       "You are a critical, faintly disapproving mother-in-law looking over these lines of inquiry. For each one, find the fault — the thing that's been overlooked, the way it could be done 'properly,' the unflattering comparison, the question that quietly implies it hasn't been thought through. Be pointed and specific, with that politely judgmental edge. Format your response as a numbered list matching the original.",
   },
   judge: {
-    label: "judge",
+    label: "Judge",
     system:
       "You are an impartial but exacting judge weighing these lines of inquiry. For each one, test it against the evidence: what's asserted without support, what burden of proof hasn't been met, what a reasonable objection or precedent would raise, and where the argument relies on speculation. Be direct and specific — rule on what would and wouldn't hold up under scrutiny. Format your response as a numbered list matching the original.",
   },
   partner: {
-    label: "partner",
+    label: "Partner",
     system:
       "You are a perceptive, emotionally honest partner gently but firmly challenging these lines of inquiry. For each one, name what's being avoided, what hasn't really been thought through, the consequences for the people involved, and the gap between what's said and what's actually meant. Be caring but direct — the kind of pushback that comes from someone who knows you well. Format your response as a numbered list matching the original.",
   },
@@ -169,6 +169,7 @@ const SYNTHESIS_SYSTEM =
 function parseArgs(argv) {
   const args = argv.slice(2);
   let persona = DEFAULT_PERSONA;
+  let personaProvided = false;
   const rest = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -176,13 +177,15 @@ function parseArgs(argv) {
       return { listPersonas: true };
     } else if (a === "--persona" || a === "-p") {
       persona = args[++i] ?? "";
+      personaProvided = true;
     } else if (a.startsWith("--persona=")) {
       persona = a.slice("--persona=".length);
+      personaProvided = true;
     } else {
       rest.push(a);
     }
   }
-  return { persona, question: rest.join(" ").trim() };
+  return { persona, personaProvided, question: rest.join(" ").trim() };
 }
 
 function listPersonas() {
@@ -193,13 +196,48 @@ function listPersonas() {
   }
 }
 
-// ── Input handling ─────────────────────────────────────────────────────────────
-function promptForQuestion() {
+// ── Interactive input ────────────────────────────────────────────────────────
+// Asks for the question, then (unless a persona was passed on the command line)
+// shows a numbered persona menu. Uses a single readline interface so piped input
+// isn't dropped between prompts. Returns { question, personaKey }.
+function runInteractive(askPersona) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  // Nested callbacks (rather than sequential awaits) so the second prompt's
+  // handler is registered synchronously — otherwise piped input can deliver the
+  // selection line during the gap between prompts and it gets dropped.
   return new Promise((resolve) => {
-    rl.question(`${DIM}What's your question? ${RESET}`, (answer) => {
-      rl.close();
-      resolve(answer.trim());
+    rl.question(`${DIM}What's your question? ${RESET}`, (qRaw) => {
+      const question = qRaw.trim();
+      if (!askPersona || !question) {
+        rl.close();
+        resolve({ question, personaKey: DEFAULT_PERSONA });
+        return;
+      }
+
+      const keys = Object.keys(PERSONAS);
+      process.stdout.write(`\n${DIM}Choose a rebuttal persona:${RESET}\n`);
+      keys.forEach((key, i) => {
+        const marker = key === DEFAULT_PERSONA ? `${DIM} (default)${RESET}` : "";
+        process.stdout.write(`  ${YELLOW}${i + 1}${RESET}. ${PERSONAS[key].label}${marker}\n`);
+      });
+
+      rl.question(`${DIM}Pick a number (or Enter for default): ${RESET}`, (selRaw) => {
+        rl.close();
+        const sel = selRaw.trim();
+        let personaKey = DEFAULT_PERSONA;
+        if (sel) {
+          const n = Number.parseInt(sel, 10);
+          if (Number.isInteger(n) && n >= 1 && n <= keys.length) {
+            personaKey = keys[n - 1];
+          } else {
+            const byName = resolvePersona(sel);
+            if (byName) personaKey = byName;
+            else process.stdout.write(`${DIM}Didn't recognise that — using the default.${RESET}\n`);
+          }
+        }
+        resolve({ question, personaKey });
+      });
     });
   });
 }
@@ -221,24 +259,30 @@ async function main() {
     process.exit(0);
   }
 
-  const personaKey = resolvePersona(parsed.persona);
-  if (!personaKey) {
-    process.stderr.write(
-      `${RED}Error: unknown persona "${parsed.persona}".${RESET}\n`,
-    );
-    listPersonas();
-    process.exit(1);
+  let personaKey = DEFAULT_PERSONA;
+  if (parsed.personaProvided) {
+    const resolved = resolvePersona(parsed.persona);
+    if (!resolved) {
+      process.stderr.write(
+        `${RED}Error: unknown persona "${parsed.persona}".\n` +
+          `Valid personas: ${Object.keys(PERSONAS).join(", ")}${RESET}\n`,
+      );
+      process.exit(1);
+    }
+    personaKey = resolved;
   }
-  const persona = PERSONAS[personaKey];
 
   let question = parsed.question;
   if (!question) {
-    question = await promptForQuestion();
+    const interactive = await runInteractive(!parsed.personaProvided);
+    question = interactive.question;
+    if (!parsed.personaProvided) personaKey = interactive.personaKey;
   }
   if (!question) {
     process.stderr.write(`${RED}Error: no question provided.${RESET}\n`);
     process.exit(1);
   }
+  const persona = PERSONAS[personaKey];
 
   const client = new Anthropic();
 
@@ -256,7 +300,7 @@ async function main() {
     const rebuttals = await runStage(client, {
       headerText: `## ⚔️ Rebuttals — ${persona.label}`,
       headerColor: YELLOW,
-      spinnerLabel: `Channelling your ${persona.label} to poke holes...`,
+      spinnerLabel: `${persona.label} is poking holes in your inquiry...`,
       system: persona.system,
       userContent: inquiry,
     });

@@ -29,7 +29,8 @@ Pass the question as an argument:
 node index.js "Is nuclear power worth the risk?"
 ```
 
-Or run with no argument and you'll be prompted for one:
+Or run with no argument and you'll be prompted for the question, then shown a
+numbered menu to pick a rebuttal persona (Enter selects the default):
 
 ```bash
 node index.js
