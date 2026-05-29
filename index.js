@@ -103,11 +103,95 @@ async function runStage(client, { headerText, headerColor, spinnerLabel, system,
 const DECOMPOSE_SYSTEM =
   "You are a rigorous analytical thinker. Given a question, identify 4–6 distinct sub-questions or lines of inquiry that must be resolved to answer it well. Be specific and non-redundant. Format as a numbered list with a one-sentence explanation for each.";
 
-const REBUTTAL_SYSTEM =
-  "You are a sharp devil's advocate. Given a set of lines of inquiry, identify the weakest assumptions, overlooked angles, or logical gaps in each one. Be direct and specific — not just 'this could be wrong' but *how* and *why*. Format your response as a numbered list matching the original.";
+// Rebuttal personas — all critical, each with a different lens. Pick one with
+// `--persona <name>` (default: devils-advocate). See PERSONAS keys below.
+const PERSONAS = {
+  "devils-advocate": {
+    label: "devil's advocate",
+    system:
+      "You are a sharp devil's advocate. Given a set of lines of inquiry, identify the weakest assumptions, overlooked angles, or logical gaps in each one. Be direct and specific — not just 'this could be wrong' but *how* and *why*. Format your response as a numbered list matching the original.",
+  },
+  manager: {
+    label: "manager",
+    system:
+      "You are a demanding, results-oriented manager reviewing these lines of inquiry. For each one, press on feasibility, cost, ownership, timelines, and measurable outcomes: who actually does this, what does it cost, how do we know it worked, and what's the risk if it slips? Be direct and specific — call out hand-waving and anything that wouldn't survive a budget or accountability review. Format your response as a numbered list matching the original.",
+  },
+  teacher: {
+    label: "high school teacher",
+    system:
+      "You are a sharp, no-nonsense high school teacher grading these lines of inquiry. For each one, point out sloppy reasoning, unsupported claims, logical fallacies, and places where the thinking needs to 'show its work.' Be direct and specific about what's missing or weak — as if leaving margin notes on a paper. Format your response as a numbered list matching the original.",
+  },
+  doctor: {
+    label: "doctor",
+    system:
+      "You are a careful, evidence-driven doctor scrutinising these lines of inquiry. For each one, ask what the actual evidence is, what's being assumed without proof, what the risks and side effects are, and whether a more cautious explanation has been ruled out. Be direct and specific — flag anything you'd want a second opinion on before acting. Format your response as a numbered list matching the original.",
+  },
+  chef: {
+    label: "professional chef",
+    system:
+      "You are an exacting professional chef tearing through these lines of inquiry like a head cook reviewing a plan before service. For each one, attack the execution: what's underprepped, what falls apart under pressure, what timing or sequencing is wrong, and where someone's cutting corners they'll regret. Be blunt and specific — no patience for anything that won't hold up on a busy night. Format your response as a numbered list matching the original.",
+  },
+  "mother-in-law": {
+    label: "mother-in-law",
+    system:
+      "You are a critical, faintly disapproving mother-in-law looking over these lines of inquiry. For each one, find the fault — the thing that's been overlooked, the way it could be done 'properly,' the unflattering comparison, the question that quietly implies it hasn't been thought through. Be pointed and specific, with that politely judgmental edge. Format your response as a numbered list matching the original.",
+  },
+  judge: {
+    label: "judge",
+    system:
+      "You are an impartial but exacting judge weighing these lines of inquiry. For each one, test it against the evidence: what's asserted without support, what burden of proof hasn't been met, what a reasonable objection or precedent would raise, and where the argument relies on speculation. Be direct and specific — rule on what would and wouldn't hold up under scrutiny. Format your response as a numbered list matching the original.",
+  },
+  partner: {
+    label: "partner",
+    system:
+      "You are a perceptive, emotionally honest partner gently but firmly challenging these lines of inquiry. For each one, name what's being avoided, what hasn't really been thought through, the consequences for the people involved, and the gap between what's said and what's actually meant. Be caring but direct — the kind of pushback that comes from someone who knows you well. Format your response as a numbered list matching the original.",
+  },
+};
+const DEFAULT_PERSONA = "devils-advocate";
+
+// Resolve a user-supplied persona name leniently (ignore case, spaces, hyphens,
+// apostrophes), with a couple of friendly aliases.
+const PERSONA_ALIASES = { devil: "devils-advocate", da: "devils-advocate", mil: "mother-in-law" };
+function resolvePersona(input) {
+  const norm = input.toLowerCase().replace(/[^a-z0-9]/g, "");
+  for (const key of Object.keys(PERSONAS)) {
+    if (key.replace(/[^a-z0-9]/g, "") === norm) return key;
+  }
+  return PERSONA_ALIASES[norm] ?? null;
+}
 
 const SYNTHESIS_SYSTEM =
   "You are a wise and precise synthesiser. You have been given a question, a set of analytical lines of inquiry, and a set of rebuttals to those inquiries. Your job is to produce a final, well-reasoned answer that acknowledges the strongest objections and takes a clear position where the evidence supports one. Do not hedge excessively. Be direct.";
+
+// ── Argument parsing ───────────────────────────────────────────────────────────
+// Pulls out `--persona <name>` / `--persona=<name>` / `-p <name>` and
+// `--list-personas`; everything else is treated as the question text.
+function parseArgs(argv) {
+  const args = argv.slice(2);
+  let persona = DEFAULT_PERSONA;
+  const rest = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--list-personas") {
+      return { listPersonas: true };
+    } else if (a === "--persona" || a === "-p") {
+      persona = args[++i] ?? "";
+    } else if (a.startsWith("--persona=")) {
+      persona = a.slice("--persona=".length);
+    } else {
+      rest.push(a);
+    }
+  }
+  return { persona, question: rest.join(" ").trim() };
+}
+
+function listPersonas() {
+  process.stdout.write(`${DIM}Available rebuttal personas (use --persona <name>):${RESET}\n`);
+  for (const [key, { label }] of Object.entries(PERSONAS)) {
+    const marker = key === DEFAULT_PERSONA ? `${DIM} (default)${RESET}` : "";
+    process.stdout.write(`  ${YELLOW}${key}${RESET} — ${label}${marker}\n`);
+  }
+}
 
 // ── Input handling ─────────────────────────────────────────────────────────────
 function promptForQuestion() {
@@ -131,7 +215,23 @@ async function main() {
     process.exit(1);
   }
 
-  let question = process.argv.slice(2).join(" ").trim();
+  const parsed = parseArgs(process.argv);
+  if (parsed.listPersonas) {
+    listPersonas();
+    process.exit(0);
+  }
+
+  const personaKey = resolvePersona(parsed.persona);
+  if (!personaKey) {
+    process.stderr.write(
+      `${RED}Error: unknown persona "${parsed.persona}".${RESET}\n`,
+    );
+    listPersonas();
+    process.exit(1);
+  }
+  const persona = PERSONAS[personaKey];
+
+  let question = parsed.question;
   if (!question) {
     question = await promptForQuestion();
   }
@@ -154,10 +254,10 @@ async function main() {
 
     // Stage 2 — Rebuttal
     const rebuttals = await runStage(client, {
-      headerText: "## ⚔️ Rebuttals",
+      headerText: `## ⚔️ Rebuttals — ${persona.label}`,
       headerColor: YELLOW,
-      spinnerLabel: "Poking holes in those lines of inquiry...",
-      system: REBUTTAL_SYSTEM,
+      spinnerLabel: `Channelling your ${persona.label} to poke holes...`,
+      system: persona.system,
       userContent: inquiry,
     });
 
